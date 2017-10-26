@@ -1,10 +1,6 @@
 # Welcome to Cal Hacks 2.0!
 
-Welcome to Cal Hacks! If you haven't figured out by now, Cal Hacks is UC Berkeley's annual hella trill hackathon, put on at the California memorial stadium. It's a great place learn, build, and meet other amazing hackers.
-
-If you've never hacked before, don't worry. And if you have hacked before but want to learn how to do web development with python, you're in the perfect place.
-
-This is a guide that will help you through your first hack. We'll be building **Growler**, a Twitter-like communication app for dysfunctional teams, in Flask and Python.
+This is a guide that will help you through your first hack. We'll be building **Growler**, a Twitter-like communication app for dysfunctional teams, in Flask and Python, using MongoDB Atlas to store our tweets.
 
 # Step 0: How to get help
 
@@ -244,90 +240,80 @@ This is a very general pattern for web applications. The user will input some da
 
 Later, when the user wants to see their data, they'll request data from the web server via HTTP request, the server will ask the database for the data, then send it back down in the HTTP response.
 
-We'll be using the `sqlite3` database to store our growls. It's conveniently packaged with Python, so we don't need to install anything!
+We'll be using MongoDB to store our growls. To do so, we'll need to install the python driver for MongoDB, which handles all the details of interacting with the actual database server for us.
 
-So what's `sqlite3`? Well, you might have heard of SQL before. It stands for *Structured Query Language* and it's a language you use to ask, or query, a database for data. In SQL databases, data is organized into *tables*, which have rows and columns. `sqlite3` is just an example of a SQL database.
+One more time in your terminal, enter
 
-As mentioned above, a database is a collection of tables, kind of like an Excel spreadsheet, where each column is a different piece of information that an entry needs, and each row is an entry in the table.
+    pip3 install flask
 
-Let's play with sqlite a bit first. Make a file called `init_db.py` in your `growler` folder. Put the following in.
-```python
-import sqlite3
-conn = sqlite3.connect('growls.db')
-```
 
-This imports the sqlite package and opens a connection to the database file named `growls.db`. If the file doesn't exist, sqlite will create it automatically.
-```python
-c = conn.cursor()
-```
-We'll go more into detail on this later. A cursor basically points to a specific row in the database, which allows a programmer to make changes row by row. Now we can begin executing our SQL queries.
-```python
-c.execute("CREATE TABLE IF NOT EXISTS growls (name, datetime, growl)")
-```
-This creates a new table named `growls` inside the `growls.db` database with three columns: name, datetime, and growl. (If you rerun this, the `IF NOT EXISTS` makes sure you don't overwrite your data so far.) Each growl will need to have this information. Cool! Now let's try and add a growl!
+So what's MongoDB? It's a non-SQL (aka NoSQL) database that organizes data into collections of documents, which you can think of as similar to dictionaries in Python. This is a little different than traiditonal SQL databases, which organize data into tables with rows and columns.
 
-```python
-c.execute("INSERT INTO growls VALUES ('oski', '100', 'Hello Cal Hacks!')")
-```
+In a MongoDB collection, not all documents need to have the same fields. Some might have a field to hold all the replies to a growl and others with no replies can drop the field entirely.
 
-This creates a growl by the user `oski` with the text `Hello Cal Hacks!`, and that this growl was created `100` seconds after January 1, 1970 (This is convention for how Python handles time.).
+You can set up MongoDB manually on the machine of your choice, but this requires some more instruction outside of the scope of this tutorial. Instead, we'll make use of MongoDB Atlas, which lets you create a MongoDB cluster through the Atlas website that runs on Amazon's cloud. A cluster simply refers to multiple servers working together to run one instance of MongoDB.
 
-Let's double check that this works. Now we can read from the database and we should be able to see our growl!
-```python
-c.execute("SELECT * FROM growls")
-print(c.fetchall())
-```
-Now let's commit (save) the changes and close the connection.
-```python
-conn.commit()
-conn.close()
-```
-Now save the file and run it by doing `python3 init_db.py`. It should create the `growls.db` file and print out something like `[('bob', '100', 'Hello world!')]` to show that reading from the database was successful. Awesome!
+First, let's set up a MongoDB cloud account [here](https://www.mongodb.com/cloud/atlas). Sign in, and you'll be redirected to this page to build your first cluster:
 
-Let's add a databse to our Flask server. We'll add the following code to our `server.py` file. Add in the new Flask imports `g` and the `time` module, which we will be using soon. Let's also make a constant for the name of our databse, so we don't have to repeat the database name everywhere. The top of your `server.py` file should look something like this.
+![](https://i.imgur.com/eIvIYDX.png)
+
+Now scroll down to select the free tier (you can upgrade to a higher tier after your first users sign up), set a master username and password, and hit create. On the following dashboard, hit the connect button on the cluster you just created:
+
+![](https://i.imgur.com/3Vd0khv.png)
+
+Click the `Allow access from anywhere` button allow all IP addresses to connect (in practice you want to restrict access to your database to just your backend server as an extra layer of security against potential hackers beyond password protection, but probably nobody is trying that hard to steal your growls).
+
+Now click the `Connect your application` tile to view your connection string. You'll use this with the Python driver to connect your flask app to the MongoDB database. However, since this string will contain your password we don't want to use this exact string in the code of your program, otherwise anyone who sees your code can control your Atlas account. If you don't plan on sharing this code with the general public, feel free to ignore this next part.
+
+Instead, we can store the full string as an *environment variable* on your computer, and set up our server to ask the computer for the connection string every time it needs it. You can find instructions on how to set an environment variable on Google, or try asking your neighbor or a mentor.
+
+We're just about ready to hook our flask server to the MongoDB cluster. Back in `server.py`, add the following code to the top of the file. Add in the new Flask imports `g` and the `time` module, which we will be using soon.
 
 ```python
-import sqlite3
+import pymongo
 import time
 from flask import Flask, request, g
 
+# If you stored your connection string in the env variable MONGOCONN:
+import os
+conn_str = os.environ['MONGOCONN']
+# otherwise:
+conn_str = "mongodb://..."
+
+client = pymongo.MongoClient(conn_str)
+db = client.growls
 app = Flask(__name__)
-DATABASE = 'growls.db'
 ```
 
-Then let's add two functions to connect and disconnect from the database inside Flask. This code is borrowed from the Flask documentation, and you don't need to understand it right now.
 
-```python
-def get_db():
-    db = getattr(g, '_database', None)
-    if db is None:
-        db = g._database = sqlite3.connect(DATABASE)
-    return db
+Now we can write helper functions to make it easier to interact with the database
 
-@app.teardown_appcontext
-def close_connection(exception):
-    db = getattr(g, '_database', None)
-    if db is not None:
-        db.close()
-```
-
-Now we can write a few more helper functions to make it easier to interact with the database.
 ```python
 def db_read_growls():
-    c = get_db().cursor()
-    c.execute("SELECT * FROM growls")
-    return cur.fetchall()
-```
-This (as the function name suggests) reads the growls from the database. The function `fetchall` returns them as a list.
-```python
+    c = db.growls.find().sort("time", pymongo.DESCENDING)
+    return [(g['name'], g['time'], g['text']) for g in c] 
+
 def db_add_growl(name, growl):
-    c = get_db().cursor()
     t = str(time.time())
-    growl_info = (name, t, growl)
-    c.execute("INSERT INTO growls VALUES (?, ?, ?)", growl_info)
-    get_db().commit()
+    growl = {"name": name, "time": t, "text": growl}
+    db.growls.insert(growl)
 ```
-Here we are using the `time` function in the `time` module to get the timestamp for the growl. This gives us the number of seconds since the epoch (January 1, 1970). The `execute` function also allows us to pass in a tuple, so we can add in question marks in the query string and they will automatically get filled with the data in our `growl_info` tuple. Finally, after we insert our growl into the database, we need to commit the changes.
+
+Here we are using the `time` function in the `time` module to get the timestamp for the growl. This gives us the number of seconds since the epoch (January 1, 1970). Notice we can simply call the insert method on our `db.growls` collection on a dictionary to insert it- neat!
+
+To read the growls back out of the database, we first call `find` on the growls collection, and then sort the growls in descending order by the value of the `time` field.
+
+Find returns a cursor, of which we can call `sort` to sort the results and return the cursor. You can think of the cursor as pointing to the results in the database, but not actually containing the results. We then construct and return a list of triplets each containing the name, time, and text fields of a growl using a list comprehension.
+
+Now we need to add in logic to save the growls once we submit the form. For that, we'll need to edit the `receive_growl` function. Remember the `request.form`? That is basically a dictionary containing all the data we submitted in the form. We'll need to grab that data and pass it into our `db_add_growl` function.
+```python
+@app.route("/api/growl", methods=["POST"])
+def receive_growl():
+    print(request.form)
+    db_add_growl(request.form['name'], request.form['growl'])
+    return "Success!"
+```
+That should be everything you need to hook up to your database! Let's make sure it works! Add a tweet using the form on your homepage. It should take you to the page that says "Success!". 
 
 Now that we have all the database logic, we can add it into our route functions. We want all the most recent growls to appear on the home page, so the `hello` function should use the `db_read_growls` function to display the list of growls. Before we do the logic to display the growls, let's first double check that this works by simply printing out the growls.
 ```python
@@ -337,27 +323,17 @@ def hello():
     print(growls)
     return app.send_static_file('index.html')
 ```
-Reload your browser to [http://127.0.0.1:5000/](http://127.0.0.1:5000/). Nothing will have changed, but if you check your terminal window running the server, you should see the list of growls getting printed out. You should have one growl in there if you ran the `init_db.py` script. Something like this:
+Reload your browser to [http://127.0.0.1:5000/](http://127.0.0.1:5000/). Nothing will have changed, but if you check your terminal window running the server, you should see the list of growls getting printed out. Something like this:
 ```
  * Running on http://127.0.0.1:5000/
 [('oski', '100', 'Hello Cal Hacks!')]
 127.0.0.1 - - [16/Jul/2014 23:10:15] "GET / HTTP/1.1" 200 -
 ```
-Now we need to add in logic to save the growls once we submit the form. For that, we'll need to edit the `receive_growl` function. Remember the `request.form`? That is basically a dictionary containing all the data we submitted in the form. We'll need to grab that data and pass it into our `db_add_growl` function.
-```python
-@app.route("/api/growl", methods=["POST"])
-def receive_growl():
-    print(request.form)
-    db_add_growl(request.form['name'], request.form['growl'])
-    return "Success!"
-```
-That should be everything you need to hook up to your database! Let's make sure it works! Add a tweet using the form on your homepage. It should take you to the page that says "Success!". Now, when you go back to the homepage, refresh your browser, and check your terminal window, you should see more growls getting printed out.
 
-If SQL at all seems a bit intimidating for you, don't worry. There are better an eaisier solutions for databses (which unfortunately may take too long to explain in depth in this workshop.) But feel free to google and ask about SQLAlchemy and MongoDB. We might also have sponsor workshops on those topics, so check in the Cal Hacks group.
 
 Awesome! The database is hooked up and ready to go.
 
-**Future reading**: We glossed over sqlite and SQL, only covering what was necessary to build Growler. To learn more about it, read this short guide in the Flask documentation: [Using SQLite 3 with Flask](http://flask.pocoo.org/docs/patterns/sqlite3/)
+**Future reading**: To learn more about MongoDB, read this short tutorial walking through [how to use PyMongo:](http://api.mongodb.com/python/current/tutorial.html)
 
 # Step 8: Displaying our growls
 
@@ -367,9 +343,11 @@ What's a template? Think about what a Facebook profile looks like. Every user ha
 
 Let's write a template. First, we'll need to import `render_template` from flask. Your imports should look like this now.
 ```python
-import sqlite3
+import pymongo
 import time
 from flask import Flask, g, request, render_template
+# If you stored your connection string in the env variable MONGOCONN:
+import os
 ```
 Now replace `send_static_file` with `render_template` inside of the `hello` function. Now it should look like this.
 ```python
@@ -398,7 +376,7 @@ Now we can access `growls` from our `index.html` file. Lets edit `index.html` an
 But we don't want to show only ONE growl, but we want to be able to list all of them. How do we do that? Well, with a for loop of course!
 ```html
 <div id="feed">
-    <h2> Hakks </h2>
+    <h2> Growls </h2>
     {% for growl in growls %}
     <div class="growl">
         <b>{{ growl[0] }}</b>
@@ -414,9 +392,11 @@ One more thing, let's change that "Success!" page after you post a growl. That w
 Let's go back to server.py. Import the function `redirect` from `flask` at the top of your `server.py` file. As you might've guessed, `redirect` will redirect you to a different page, in our case, back to the home page!
 
 ```python
-import sqlite3
+import pymongo
 import time
-from flask import Flask, g, request, render_template
+from flask import Flask, g, request, render_template, redirect
+# If you stored your connection string in the env variable MONGOCONN:
+import os
 ```
 
 Now, inside your `receive_growl()` function, replace the line
